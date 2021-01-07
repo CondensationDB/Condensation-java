@@ -1,0 +1,84 @@
+#! /usr/bin/env node
+'use strict';
+
+const fs = require('fs');
+const process = require('process');
+
+var modules = {};
+readFolder('../condensation');
+
+function readFolder(folder) {
+	var list = fs.readdirSync(folder);
+	for (var i = 0; i < list.length; i++) {
+		var item = list[i];
+		var path = folder + '/' + item;
+		var stat = fs.statSync(path);
+		if (stat.isDirectory()) {
+			readFolder(path);
+		} else {
+			readFile(folder, path);
+		}
+	}
+}
+
+function readFile(folder, path) {
+	var match = folder.match(/condensation.*$/);
+	if (! match) return;
+	var module = match[0].replace(/\//g, '.');
+
+	if (! modules[module]) modules[module] = {};
+	var m = modules[module];
+
+	var content = fs.readFileSync(path, 'utf8');
+	content.replace(/import (.*?)\.([A-Z].*);/g, add);
+
+	function add(match, a, b) {
+		if (! a.startsWith('condensation')) return;
+		if (a == 'condensation') return;
+		if (a == 'condensation.tools') return;
+		if (a == module) return;
+		m[a] = true;
+	}
+}
+
+function listAll(module) {
+	var set = {}
+	traverse(module);
+	return set;
+
+	function traverse(module) {
+		if (set[module]) return;
+		set[module] = true;
+		var m = modules[module];
+		for (var p in m)
+			if (m[p]) traverse(p);
+	}
+}
+
+function areSetsEqual(a, b) {
+	for (var m in a)
+		if (! b[m]) return false;
+	for (var m in b)
+		if (! a[m]) return false;
+	return true;
+}
+
+for (var module in modules) {
+	var m = modules[module];
+	console.log();
+	console.log(module);
+
+	var all = listAll(module);
+
+	var packages = Object.keys(m);
+	packages.sort();
+	for (var i = 0; i < packages.length; i++) {
+		var p = packages[i];
+		m[p] = false;
+		var withoutP = listAll(module);
+		if (areSetsEqual(all, withoutP)) continue;
+
+		m[p] = true;
+		console.log('  ' + p);
+	}
+}

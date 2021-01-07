@@ -1,0 +1,167 @@
+#! /usr/bin/env node
+'use strict';
+
+const fs = require('fs');
+const process = require('process');
+
+var strings = {};
+var functions = [];
+var root = '../condensation';
+traverse(root + '/serialization');
+traverse(root + '/actors');
+traverse(root + '/actorGroups');
+traverse(root + '/stores');
+traverse(root + '/messaging');
+traverse(root + '/unionList');
+traverse(root + '/dataTree');
+traverse(root + '/actorWithDataTree');
+functions.sort();
+
+var fd = fs.openSync('interface', 'w');
+for (var i = 0; i < functions.length; i++)
+	fs.writeSync(fd, functions[i] + '\n');
+fs.closeSync(fd);
+
+var fd = fs.openSync('strings', 'w');
+var stringList = Object.keys(strings);
+stringList.sort();
+for (var i = 0; i < stringList.length; i++) {
+	var key = stringList[i];
+	fs.writeSync(fd, key + '\t' + strings[key] + '\n');
+}
+fs.closeSync(fd);
+
+function traverse(folder) {
+	var files = fs.readdirSync(folder);
+	for (var i = 0; i < files.length; i++) {
+		var fullname = folder + '/' + files[i];
+		var stats = fs.statSync(fullname);
+		if (stats.isDirectory()) traverse(fullname);
+		else traverseFile(fullname);
+	}
+}
+
+function traverseFile(file) {
+	if (file.match(/immutableRecord/)) return;
+	console.log(file);
+	var match = file.match(/condensation\/(.*?)\/(.*).java$/);
+	if (! match) return error(file, 'Invalid file name.');
+	var section = match[1];
+	if (match[2].match(/Inspection$/)) return;
+
+	var content = fs.readFileSync(file, 'utf8');
+	if (content.indexOf('\r\n') >= 0) error(file, 'CR-LF line endings.');
+	var lines = content.split(/\n/);
+	
+	var path = [];
+	for (var i = 0; i < lines.length; i++) {
+		var line = lines[i];
+
+		var ignoreStringMatch = line.match(/(Text.encode\(|Condensation.log)/);
+		if (! ignoreStringMatch) {
+			var stringMatch = line.match(/\".*\"/);
+			if (stringMatch) strings[stringMatch[0]] = (strings[stringMatch[0]] || 0) + 1;
+		}
+
+		var classMatch = line.match(/^(\s*)(public |)(static |)(abstract |)(final |)(class|interface) ([a-zA-Z0-9]+) (extends|implements|\{)/);
+		if (classMatch) {
+			var indent = classMatch[1].length;
+			var name = classMatch[7];
+			if (name == 'CondensationObject') name = 'Object';
+			path[indent] = {name: name, isPublic: classMatch[2] != '', isStatic: classMatch[3] != ''};
+			while (path.length > indent + 1) path.pop();
+			continue;
+		}
+
+		var constructorMatch = line.match(/^(\s*)(public |)([a-zA-Z0-9]+)\((.*)\) \{$/);
+		if (constructorMatch) {
+			var indent = constructorMatch[1].length;
+			while (path.length > indent) path.pop();
+
+			var isPublic = constructorMatch[2] != '';
+			if (! isPublic) continue;
+			var name = constructorMatch[3];
+			var args = parseArgs(constructorMatch[4]);
+			if (args.length > 0 && (args[args.length - 1].name == 'done' || args[args.length - 1].name == 'delegate')) args.pop();
+
+			addFunction(path, 'new', true, args);
+			continue;
+		}
+
+		var methodMatch = line.match(/^(\s*)(public |)(static |)(final |)([a-zA-Z0-9\[\]]+|[a-zA-Z0-9]+<[a-zA-Z0-9\[\], ]+>) ([a-zA-Z0-9]+)\((.*)\) \{$/);
+		if (methodMatch) {
+			var indent = methodMatch[1].length;
+			if (indent > path.length) continue;
+			while (path.length > indent) path.pop();
+
+			var isPublic = methodMatch[2] != '';
+			if (! isPublic) continue;
+			var isStatic = methodMatch[3] != '';
+			var isFinal = methodMatch[4] != '';
+			var name = methodMatch[6];
+			var args = parseArgs(methodMatch[7]);
+			if (name == 'equals' && args[0].type == 'Object') continue;
+			if (name == 'hashCode' && ! args.length) continue;
+			if (name == 'toString' && ! args.length) continue;
+			if (name == 'compareTo' && args.length == 1) continue;
+			if (name == 'background' && ! args.length) continue;
+			if (name == 'after' && ! args.length) continue;
+			if (args.length > 0 && (args[args.length - 1].name == 'done' || args[args.length - 1].name == 'delegate')) args.pop();
+
+			addFunction(path, name, isStatic, args);
+			continue;
+		}
+
+		var variableMatch = line.match(/^(\s*)(public |)(static |)(final |)([a-zA-Z0-9\[\]]+|[a-zA-Z0-9]+<[a-zA-Z0-9\[\], ]+>) ([a-zA-Z0-9]+)(;| =)/);
+		if (variableMatch) {
+			var indent = variableMatch[1].length;
+			if (indent > path.length) continue;
+			while (path.length > indent) path.pop();
+			var isPublic = variableMatch[2] != '';
+			if (! isPublic) continue;
+			var isStatic = variableMatch[3] != '';
+			addPublicValue(path, variableMatch[6], isStatic);
+			continue;
+		}
+	}
+	
+	function parseArgs(text) {
+		text = text.replace(/<(.*?)>/, '<...>');
+		var args = text == '' ? [] : text.split(/,/);
+		for (var n = 0; n < args.length; n++) {
+			var arg = args[n];
+			var m = arg.match(/^\s*(@NonNull |)(final |)([a-zA-Z0-9\[\]<\.>]+) ([a-zA-Z0-9]+)\s*$/);
+			if (! m) {
+				error(file, 'Weird argument: ' + arg);
+				continue;
+			}
+
+			args[n] = {type: m[3], name: m[4]};
+		}
+
+		return args;
+	}
+}
+
+function classname(path) {
+	var segments = ['CN'];
+	for (var i = 0; i < path.length; i++)
+		segments.push(path[i] ? path[i].name : '?');
+	return segments.join('/');
+}
+
+function addFunction(path, name, isStatic, args) {
+	var argNames = [];
+	for (var i = 0; i < args.length; i++)
+		argNames.push(args[i].name);
+	functions.push(classname(path) + '\t' + (isStatic ? 'STATIC METHOD' : 'METHOD') + '\t' + name +  '\t' + argNames.join(', '));
+}
+
+function addPublicValue(path, name, isStatic) {
+	functions.push(classname(path) + '\t' + (isStatic ? 'STATIC VALUE' : 'VALUE') + '\t' + name);
+}
+
+function error(file, text) {
+	console.log('  ' + text);
+	return false;
+}
