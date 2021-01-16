@@ -15,7 +15,7 @@ It's a one stop open source project to match the next decades complex security c
 
 ## Get started
 
-Condensation Java implementation is stable and PROD ready but we are still packaging it, preparing instructions for the installation, and building the first tutorials. 
+Condensation Java implementation is stable but we are still packaging it, preparing instructions for the installation, and building the first tutorials. 
 We welcome the most advanced developers to already get into the code 
 
 We are currently building our contribution framework, if you are interested in contributing we can give you more details on the next priorities. Please can get in touch at info@condensationDB.com
